@@ -1,28 +1,53 @@
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
+import { validateSignature } from "@line/bot-sdk";
 import { invokeAI, invokeAIwithTools, invokeAIStream } from "./ai";
 
-const app = new Hono();
+type Bindings = {
+  LINE_CHANNEL_SECRET?: string;
+  LINE_CHANNEL_ACCESS_TOKEN?: string;
+  OPENAI_API_KEY?: string;
+};
+
+const app = new Hono<{ Bindings: Bindings }>();
+
+function getEnvValue(c: { env: Bindings }, key: keyof Bindings) {
+  return c.env[key] ?? process.env[key];
+}
 
 app.get("/", (c) => {
   return c.text("Hello Hono!");
 });
 
 app.get("/ai", async (c) => {
+  const apiKey = getEnvValue(c, "OPENAI_API_KEY");
+  if (!apiKey) {
+    return c.json({ message: "OPENAI_API_KEY is not set" }, 500);
+  }
+
   const response = await invokeAI(
     "AIに目的を与えて完遂させるにはどうしたらいいか",
+    apiKey,
   );
   console.log(response);
   return c.json({ response });
 });
 
 app.get("/stream", async (c) => {
+  const apiKey = getEnvValue(c, "OPENAI_API_KEY");
+  if (!apiKey) {
+    return c.json({ message: "OPENAI_API_KEY is not set" }, 500);
+  }
+
   c.header("Content-Type", "text/event-stream; charset=utf-8");
   c.header("Cache-Control", "no-cache");
   c.header("Connection", "keep-alive");
 
   return stream(c, async (stream) => {
-    const response = await invokeAIStream("カレーライスの作り方を教えて");
+    const response = await invokeAIStream(
+      "カレーライスの作り方を教えて",
+      apiKey,
+    );
     // OpenAI SDKはAsyncIterableなのでfor awaitで回せる
     for await (const chunk of response) {
       if (chunk.type === "response.output_text.delta") {
@@ -39,10 +64,79 @@ app.get("/stream", async (c) => {
 });
 
 app.get("/ai-tools", async (c) => {
+  const apiKey = getEnvValue(c, "OPENAI_API_KEY");
+  if (!apiKey) {
+    return c.json({ message: "OPENAI_API_KEY is not set" }, 500);
+  }
+
   const response = await invokeAIwithTools(
     "4898 + 32908 = ? Toolを使って計算して",
+    apiKey,
   );
   return c.json({ response });
 });
+
+app.post("/webhook", async (c) => {
+  const channelSecret = getEnvValue(c, "LINE_CHANNEL_SECRET");
+  const channelAccessToken = getEnvValue(c, "LINE_CHANNEL_ACCESS_TOKEN");
+  if (!channelSecret || !channelAccessToken) {
+    return c.json({ message: "LINE credentials are not set" }, 500);
+  }
+
+  const body = await c.req.text();
+  const signature = c.req.header("x-line-signature") ?? "";
+
+  // 署名検証（必須）
+  if (!validateSignature(body, channelSecret, signature)) {
+    return c.json({ message: "Unauthorized" }, 401);
+  }
+
+  const events = JSON.parse(body).events;
+
+  // 非同期で処理（LINEは1秒以内のレスポンスを期待）
+  c.executionCtx.waitUntil(handleEvents(events, channelAccessToken));
+
+  return c.json({ status: "ok" });
+});
+
+type LineWebhookEvent = {
+  type: string;
+  replyToken?: string;
+  message?: {
+    type?: string;
+    text?: string;
+  };
+};
+
+async function handleEvents(events: LineWebhookEvent[], channelAccessToken: string) {
+  for (const event of events) {
+    if (
+      event.type === "message" &&
+      event.message?.type === "text" &&
+      event.replyToken &&
+      event.message.text
+    ) {
+      await replyMessage(event.replyToken, event.message.text, channelAccessToken);
+    }
+  }
+}
+
+async function replyMessage(
+  replyToken: string,
+  text: string,
+  channelAccessToken: string,
+) {
+  await fetch("https://api.line.me/v2/bot/message/reply", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${channelAccessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      replyToken,
+      messages: [{ type: "text", text: `受信: ${text}` }],
+    }),
+  });
+}
 
 export default app;

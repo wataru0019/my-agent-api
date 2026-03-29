@@ -4,5 +4,9 @@ node_modules/
 dist/
 public/
 
-.env*
-.dev.vars*
+.wrangler/
+
+.dev.vars
+.dev.vars.*
+.env
+.env.*

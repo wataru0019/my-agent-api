@@ -1,11 +1,12 @@
 import OpenAI from "openai";
 import type { Tool } from "../types";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+function createOpenAIClient(apiKey: string) {
+  return new OpenAI({ apiKey });
+}
 
-export async function invokeAI(prompt: string) {
+export async function invokeAI(prompt: string, apiKey: string) {
+  const openai = createOpenAIClient(apiKey);
   const response = await openai.responses.create({
     model: "gpt-5.4-nano",
     reasoning: { effort: "low" },
@@ -20,7 +21,8 @@ export async function invokeAI(prompt: string) {
   return response.output_text;
 }
 
-export async function invokeAIStream(prompt: string) {
+export async function invokeAIStream(prompt: string, apiKey: string) {
+  const openai = createOpenAIClient(apiKey);
   const stream = await openai.responses.create({
     model: "gpt-5.4-nano",
     input: [
@@ -63,7 +65,8 @@ const tool: Tool = {
 
 const tools = [tool.toolDefine];
 
-export async function invokeAIwithTools(prompt: string) {
+export async function invokeAIwithTools(prompt: string, apiKey: string) {
+  const openai = createOpenAIClient(apiKey);
   const response = await openai.responses.create({
     model: "gpt-5-nano",
     input: [

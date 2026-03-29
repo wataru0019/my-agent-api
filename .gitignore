@@ -1,0 +1,8 @@
+# deps
+node_modules/
+
+dist/
+public/
+
+.env*
+.dev.vars*

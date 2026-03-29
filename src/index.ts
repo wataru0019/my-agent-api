@@ -108,7 +108,10 @@ type LineWebhookEvent = {
   };
 };
 
-async function handleEvents(events: LineWebhookEvent[], channelAccessToken: string) {
+async function handleEvents(
+  events: LineWebhookEvent[],
+  channelAccessToken: string,
+) {
   for (const event of events) {
     if (
       event.type === "message" &&
@@ -116,7 +119,11 @@ async function handleEvents(events: LineWebhookEvent[], channelAccessToken: stri
       event.replyToken &&
       event.message.text
     ) {
-      await replyMessage(event.replyToken, event.message.text, channelAccessToken);
+      await replyMessage(
+        event.replyToken,
+        event.message.text,
+        channelAccessToken,
+      );
     }
   }
 }
@@ -126,6 +133,21 @@ async function replyMessage(
   text: string,
   channelAccessToken: string,
 ) {
+  const apiKey = getEnvValue(c, "OPENAI_API_KEY");
+  if (!apiKey) {
+    await fetch("https://api.line.me/v2/bot/message/reply", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${channelAccessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        replyToken,
+        messages: [{ type: "text", text: `受信: APIKEYがありません` }],
+      }),
+    });
+  }
+  const res = await invokeAI(text, apiKey);
   await fetch("https://api.line.me/v2/bot/message/reply", {
     method: "POST",
     headers: {
@@ -134,7 +156,7 @@ async function replyMessage(
     },
     body: JSON.stringify({
       replyToken,
-      messages: [{ type: "text", text: `受信: ${text}` }],
+      messages: [{ type: "text", text: `受信: ${res.output_text}` }],
     }),
   });
 }

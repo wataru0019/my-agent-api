@@ -79,7 +79,8 @@ app.get("/ai-tools", async (c) => {
 app.post("/webhook", async (c) => {
   const channelSecret = getEnvValue(c, "LINE_CHANNEL_SECRET");
   const channelAccessToken = getEnvValue(c, "LINE_CHANNEL_ACCESS_TOKEN");
-  if (!channelSecret || !channelAccessToken) {
+  const apiKey = getEnvValue(c, "OPENAI_API_KEY");
+  if (!channelSecret || !channelAccessToken || !apiKey) {
     return c.json({ message: "LINE credentials are not set" }, 500);
   }
 
@@ -94,7 +95,7 @@ app.post("/webhook", async (c) => {
   const events = JSON.parse(body).events;
 
   // 非同期で処理（LINEは1秒以内のレスポンスを期待）
-  c.executionCtx.waitUntil(handleEvents(events, channelAccessToken));
+  c.executionCtx.waitUntil(handleEvents(events, channelAccessToken, apiKey));
 
   return c.json({ status: "ok" });
 });
@@ -102,6 +103,9 @@ app.post("/webhook", async (c) => {
 type LineWebhookEvent = {
   type: string;
   replyToken?: string;
+  source?: {
+    userId?: string;
+  };
   message?: {
     type?: string;
     text?: string;
@@ -111,19 +115,32 @@ type LineWebhookEvent = {
 async function handleEvents(
   events: LineWebhookEvent[],
   channelAccessToken: string,
+  apiKey: string,
 ) {
   for (const event of events) {
-    if (
-      event.type === "message" &&
-      event.message?.type === "text" &&
-      event.replyToken &&
-      event.message.text
-    ) {
-      await replyMessage(
-        event.replyToken,
-        event.message.text,
-        channelAccessToken,
-      );
+    try {
+      if (
+        event.type === "message" &&
+        event.message?.type === "text" &&
+        event.replyToken &&
+        event.message.text
+      ) {
+        await replyMessage(
+          event.replyToken,
+          "メッセージを受け付けました。返信を生成しています。",
+          channelAccessToken,
+        );
+
+        if (!event.source?.userId) {
+          console.error("LINE push skipped: userId is missing");
+          continue;
+        }
+
+        const aiText = await invokeAI(event.message.text, apiKey);
+        await pushMessage(event.source.userId, aiText, channelAccessToken);
+      }
+    } catch (error) {
+      console.error("Webhook event handling failed", error);
     }
   }
 }
@@ -133,22 +150,8 @@ async function replyMessage(
   text: string,
   channelAccessToken: string,
 ) {
-  const apiKey = getEnvValue(c, "OPENAI_API_KEY");
-  if (!apiKey) {
-    await fetch("https://api.line.me/v2/bot/message/reply", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${channelAccessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        replyToken,
-        messages: [{ type: "text", text: `受信: APIKEYがありません` }],
-      }),
-    });
-  }
-  const res = await invokeAI(text, apiKey);
-  await fetch("https://api.line.me/v2/bot/message/reply", {
+  const safeText = text.slice(0, 5000);
+  const response = await fetch("https://api.line.me/v2/bot/message/reply", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${channelAccessToken}`,
@@ -156,9 +159,40 @@ async function replyMessage(
     },
     body: JSON.stringify({
       replyToken,
-      messages: [{ type: "text", text: `受信: ${res.output_text}` }],
+      messages: [{ type: "text", text: safeText }],
     }),
   });
+
+  const responseBody = await response.text();
+  if (!response.ok) {
+    console.error("LINE reply failed", response.status, responseBody);
+    throw new Error(`LINE reply failed: ${response.status} ${responseBody}`);
+  }
+}
+
+async function pushMessage(
+  userId: string,
+  text: string,
+  channelAccessToken: string,
+) {
+  const safeText = text.slice(0, 5000);
+  const response = await fetch("https://api.line.me/v2/bot/message/push", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${channelAccessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      to: userId,
+      messages: [{ type: "text", text: safeText }],
+    }),
+  });
+
+  const responseBody = await response.text();
+  if (!response.ok) {
+    console.error("LINE push failed", response.status, responseBody);
+    throw new Error(`LINE push failed: ${response.status} ${responseBody}`);
+  }
 }
 
 export default app;

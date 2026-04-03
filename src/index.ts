@@ -2,6 +2,9 @@ import { Hono } from "hono";
 import { stream } from "hono/streaming";
 import { validateSignature } from "@line/bot-sdk";
 import { invokeAI, invokeAIwithTools, invokeAIStream } from "./ai";
+import { generateText, tool, stepCountIs } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { z } from "zod";
 
 type Bindings = {
   LINE_CHANNEL_SECRET?: string;
@@ -136,8 +139,31 @@ async function handleEvents(
           continue;
         }
 
-        const aiText = await invokeAI(event.message.text, apiKey);
-        await pushMessage(event.source.userId, aiText, channelAccessToken);
+        const openai = createOpenAI({
+          apiKey: apiKey,
+        });
+
+        const { text } = await generateText({
+          model: openai("gpt-5.4-nano"),
+          system:
+            "ユーザーからの要望に適切な回答をしなさい。ユーザーからURLの提示があった場合はToolを使用し、URL先のページ要約を回答しなさい。",
+          prompt: event.message.text,
+          tools: {
+            webFetch: tool({
+              description:
+                "ユーザーから提供のあったURLのページを参照し、参照先ページの要約をする",
+              inputSchema: z.object({
+                url: z.string().url(),
+              }),
+              execute: async ({ url }) => {
+                const response = await fetch(url);
+                const text = await response.text();
+                return text;
+              },
+            }),
+          },
+        });
+        await pushMessage(event.source.userId, text, channelAccessToken);
       }
     } catch (error) {
       console.error("Webhook event handling failed", error);

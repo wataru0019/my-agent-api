@@ -162,6 +162,7 @@ async function handleEvents(
               },
             }),
           },
+          stopWhen: stepCountIs(5),
         });
         await pushMessage(event.source.userId, text, channelAccessToken);
       }
